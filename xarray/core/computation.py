@@ -1727,7 +1727,7 @@ def dot(*arrays, dims=None, **kwargs):
     return result.transpose(*all_dims, missing_dims="ignore")
 
 
-def where(cond, x, y):
+def where(cond, x, y, keep_attrs=None):
     """Return elements from `x` or `y` depending on `cond`.
 
     Performs xarray-like broadcasting across input arguments.
@@ -1743,6 +1743,13 @@ def where(cond, x, y):
         values to choose from where `cond` is True
     y : scalar, array, Variable, DataArray or Dataset
         values to choose from where `cond` is False
+    keep_attrs : bool or callable, optional
+        If True, copy attributes from `x`. If False, discard attributes.
+        Attributes on coordinates and Dataset variables are copied from the
+        corresponding objects in `x` rather than from its top-level attributes.
+        If None, use the global ``keep_attrs`` option, which defaults to False.
+        A callable receives a sequence of attribute dictionaries and a
+        ``context`` keyword argument and returns the attributes to keep.
 
     Returns
     -------
@@ -1808,8 +1815,11 @@ def where(cond, x, y):
     Dataset.where, DataArray.where :
         equivalent methods
     """
+    if keep_attrs is None:
+        keep_attrs = _get_keep_attrs(default=False)
+
     # alignment for three arguments is complicated, so don't support it yet
-    return apply_ufunc(
+    result = apply_ufunc(
         duck_array_ops.where,
         cond,
         x,
@@ -1817,7 +1827,23 @@ def where(cond, x, y):
         join="exact",
         dataset_join="exact",
         dask="allowed",
+        keep_attrs=keep_attrs,
     )
+    if keep_attrs is True:
+        from .dataset import Dataset
+
+        # Select attributes from x without changing the argument order used for
+        # broadcasting. Each variable and coordinate retains its own attributes.
+        if hasattr(result, "attrs"):
+            result.attrs = getattr(x, "attrs", {})
+        if isinstance(result, Dataset):
+            for name in result.data_vars:
+                source = x[name] if isinstance(x, Dataset) else x
+                result[name].attrs = getattr(source, "attrs", {})
+        for name, coord in getattr(x, "coords", {}).items():
+            if name in result.coords:
+                result.coords[name].attrs = coord.attrs
+    return result
 
 
 def polyval(coord, coeffs, degree_dim="degree"):

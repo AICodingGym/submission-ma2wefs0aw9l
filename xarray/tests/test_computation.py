@@ -1922,6 +1922,74 @@ def test_where() -> None:
     assert_identical(expected, actual)
 
 
+@pytest.mark.parametrize("as_dataset", [False, True])
+def test_where_preserves_variable_and_coordinate_attrs(as_dataset) -> None:
+    cond = xr.DataArray([True, False], dims="z", coords={"z": [0, 1]})
+    x = xr.DataArray([1, 2], dims="z", coords={"z": [0, 1]})
+    y = xr.DataArray([-1, -2], dims="z", coords={"z": [0, 1]})
+    for obj, label in [(cond, "cond"), (x, "x"), (y, "y")]:
+        obj.attrs = {"source": label}
+        obj.z.attrs = {"coordinate": label}
+    expected = x.copy(deep=True)
+    expected.data = np.array([1, -2])
+    if as_dataset:
+        x = xr.Dataset({"a": x, "b": x.assign_attrs(source="b")})
+        y = xr.Dataset({"a": y, "b": y})
+        x.attrs = {"dataset": "x"}
+        y.attrs = {"dataset": "y"}
+        expected = xr.Dataset(
+            {"a": expected, "b": expected.assign_attrs(source="b")},
+            attrs=x.attrs,
+        )
+    originals = [obj.copy(deep=True) for obj in (cond, x, y)]
+
+    actual = xr.where(cond, x, y, keep_attrs=True)
+
+    assert_identical(expected, actual)
+    for obj, original in zip((cond, x, y), originals):
+        assert_identical(original, obj)
+
+
+@pytest.mark.parametrize("global_keep_attrs", ["default", False, True])
+@pytest.mark.parametrize("keep_attrs", [None, False, True])
+def test_where_keep_attrs_options(global_keep_attrs, keep_attrs) -> None:
+    cond = xr.DataArray([True, False], dims="z", attrs={"source": "cond"})
+    x = xr.DataArray([1, 2], dims="z", attrs={"source": "x"})
+    y = xr.DataArray([-1, -2], dims="z", attrs={"source": "y"})
+    preserve = global_keep_attrs is True if keep_attrs is None else keep_attrs
+    expected = xr.DataArray([1, -2], dims="z", attrs=x.attrs if preserve else {})
+    with xr.set_options(keep_attrs=global_keep_attrs):
+        actual = xr.where(cond, x, y, keep_attrs=keep_attrs)
+        if keep_attrs is None:
+            assert_identical(actual, xr.where(cond, x, y))
+    assert_identical(expected, actual)
+
+
+def test_where_attrs_callable() -> None:
+    cond = xr.DataArray([True, False], dims="z", attrs={"source": "cond"})
+    x = xr.DataArray([1, 2], dims="z", attrs={"source": "x"})
+    y = xr.DataArray([-1, -2], dims="z", attrs={"source": "y"})
+    actual = xr.where(cond, x, y, keep_attrs=lambda attrs, context: attrs[-1])
+    expected = xr.DataArray([1, -2], dims="z", attrs=y.attrs)
+    assert_identical(expected, actual)
+
+
+@pytest.mark.parametrize("scalar_x", [False, True])
+def test_where_attrs_broadcast_to_dataset(scalar_x) -> None:
+    x = 1 if scalar_x else xr.DataArray([1, 2], dims="z", attrs={"source": "x"})
+    y = xr.Dataset({"a": ("z", [-1, -2]), "b": ("z", [-3, -4])})
+    attrs = {} if scalar_x else x.attrs
+    actual = xr.where([True, False], x, y, keep_attrs=True)
+    expected = xr.Dataset(
+        {
+            "a": xr.DataArray([1, -2], dims="z", attrs=attrs),
+            "b": xr.DataArray([1, -4], dims="z", attrs=attrs),
+        },
+        attrs=attrs,
+    )
+    assert_identical(expected, actual)
+
+
 @pytest.mark.parametrize("use_dask", [True, False])
 @pytest.mark.parametrize("use_datetime", [True, False])
 def test_polyval(use_dask, use_datetime) -> None:
